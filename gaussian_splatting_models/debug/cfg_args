@@ -1,0 +1,1 @@
+Namespace(sh_degree=3, source_path='/data/captures/plush_sledge', model_path='/data/captures/plush_sledge/output', images='images', resolution=-1, white_background=True, data_device='cuda', eval=False)
