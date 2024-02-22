@@ -9,6 +9,8 @@ class Camera:
     def __init__(self, h, w, position=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0)):
         self.znear = 0.01
         self.zfar = 100
+        # self.znear = .9 * max([w, h])
+        # self.zfar = 1.1 * max([w, h])
         self.h = h
         self.w = w
         self.fovy = np.pi / 2.0
@@ -41,9 +43,11 @@ class Camera:
         return np.stack([x, self.up, z], axis=-1)
 
     def get_view_matrix(self):
+        """Projection matrix from world to view (camera) space"""
         return np.array(glm.lookAt(self.position, self.target, self.up))
 
     def get_projection_matrix(self):
+        """view space to clip space"""
         project_mat = glm.perspective(
             self.fovy,
             self.w / self.h,
@@ -53,6 +57,11 @@ class Camera:
         return np.array(project_mat).astype(np.float32)
 
     def get_htanfovxy_focal(self):
+        """
+        get the tan of self.fovy/2, and scaled version for x (which is tan(self.fovx/2)). Additionally, return focal, computed as
+        focal = self.h / (2 * tan(self.fovy/2)). This is the "depth" (adjacent in sohcahtoa) at which we see height h (the "focal point", I guess)
+        (NOT the hyperbolic tan...)
+        """
         htany = np.tan(self.fovy / 2)
         htanx = htany / self.h * self.w
         focal = self.h / (2 * htany)
@@ -97,6 +106,7 @@ class Camera:
         return np.linalg.inv(proj_mat) @ points
 
     def ndc_to_pixel(self, points_ndc, screen_width=None, screen_height=None):
+        """scale linearly from [-1, 1]^2 to [0, width] x [0, height]"""
         # Use camera plane size if screen size not specified
         if screen_width is None:
             screen_width = self.w
