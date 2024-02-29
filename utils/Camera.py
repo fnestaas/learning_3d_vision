@@ -20,20 +20,20 @@ class Camera:
         self.yaw = -np.pi / 2
         self.pitch = 0
 
-        self.is_pose_dirty = True
-        self.is_intrin_dirty = True
+        # self.is_pose_dirty = True
+        # self.is_intrin_dirty = True
 
-        self.last_x = 640
-        self.last_y = 360
-        self.first_mouse = True
+        # self.last_x = 640
+        # self.last_y = 360
+        # self.first_mouse = True
 
-        self.is_leftmouse_pressed = False
-        self.is_rightmouse_pressed = False
+        # self.is_leftmouse_pressed = False
+        # self.is_rightmouse_pressed = False
 
-        self.rot_sensitivity = 0.02
-        self.trans_sensitivity = 0.01
-        self.zoom_sensitivity = 0.08
-        self.roll_sensitivity = 0.03
+        # self.rot_sensitivity = 0.02
+        # self.trans_sensitivity = 0.01
+        # self.zoom_sensitivity = 0.08
+        # self.roll_sensitivity = 0.03
 
     def _global_rot_mat(self):
         x = np.array([1, 0, 0])

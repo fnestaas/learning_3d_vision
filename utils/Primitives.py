@@ -123,6 +123,31 @@ class Gaussian:
         bboxsize_cam = thresh*np.array([self.max_scale] * 2) # not pretty, but fast and correct. Could solve optimization problem based on conv2d instead (fix a level set and find the maximum value of x/y)
         return bboxsize_cam
 
+    def get_conic(self, camera):
+        cov2d = self.get_cov2d(camera) # covariance 
+
+        det = np.linalg.det(cov2d)
+        
+        det_inv = 1.0 / max([1e-14, det]) # instead of comparing det == 0. as was done earlier
+        cov = [cov2d[0,0], cov2d[0,1], cov2d[1,1]] # unique elements of covariance matrix
+        conic = np.array([cov[2] * det_inv, -cov[1] * det_inv, cov[0] * det_inv]) # TODO: convert from NDC to pixel space
+        return conic 
+
+    def get_nonopt_bb(self, camera: Camera, thresh:float=3., ):
+        bboxsize_cam = self.get_fast_bb(thresh)
+        
+        bboxsize_ndc = bboxsize_cam# np.clip(bboxsize_cam, -1, 1)
+
+        vertices = np.array([[-1, 1], [1, 1], [1, -1], [-1, -1]]) # this is actually unneccessary... TODO
+        bboxsize_cam = np.multiply(vertices, bboxsize_cam) # assuming bboxsize_cam has bounds on x and y for the ellipse, this bounds ul, ur, ll, lr. In principle, that's unneccesary as it uses 8, and not 4, coords (TODO)
+        g_pos_ndc = self.get_pos_ndc(camera)
+        
+        bbox_ndc = np.multiply(vertices, bboxsize_ndc) + g_pos_ndc[:2]
+        bbox_ndc = np.hstack((bbox_ndc, np.zeros((vertices.shape[0],2)))) # concatenate bbox with "dummy" zeros
+        bbox_ndc[:,2:4] = g_pos_ndc[2:4] # replace the dummy zeros above with z and w from clip position of gaussian. TODO: This is strange, in light of the way we define bboxsize_cam 
+        
+        return bboxsize_cam, bbox_ndc
+
     def get_conic_and_bb(self, camera: Camera, thresh:float=3., optimal:bool=False):
         """Get conic and other bounding boxes. Is this implementation sound?"""
         cov2d = self.get_cov2d(camera) # covariance 
