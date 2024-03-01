@@ -1,4 +1,5 @@
 # Adapted from the version at https://github.com/limacv/GaussianSplattingViewer/blob/main/util.py
+# TODO: still limitations. E.g. pitch and yaw are not used... 
 from OpenGL.GL import *
 import OpenGL.GL.shaders as shaders
 import numpy as np
@@ -6,7 +7,7 @@ import glm
 import ctypes
 
 class Camera:
-    def __init__(self, h, w, position=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0)):
+    def __init__(self, h, w, position=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0), yaw=-np.pi/2, pitch=0):
         self.znear = 0.01
         self.zfar = 100
         # self.znear = .9 * max([w, h])
@@ -17,8 +18,8 @@ class Camera:
         self.position = np.array(position)
         self.target = np.array(target)
         self.up = np.array([0.0, -1.0, 0.0])
-        self.yaw = -np.pi / 2
-        self.pitch = 0
+        # self.yaw = yaw # TODO: never used. That's a bad sign...
+        # self.pitch = pitch
 
         # self.is_pose_dirty = True
         # self.is_intrin_dirty = True
