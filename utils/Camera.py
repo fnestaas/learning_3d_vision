@@ -21,7 +21,7 @@ class Camera:
 
     def _global_rot_mat(self):
         x = np.array([1, 0, 0])
-        z = np.cross(x, self.up)
+        z = np.cross(x, self.up) / np.linalg.norm(self.up)
         z = z / np.linalg.norm(z)
         x = np.cross(self.up, z)
         return np.stack([x, self.up, z], axis=-1)
