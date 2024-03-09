@@ -1,7 +1,8 @@
 # Running the code
-1. Download the Gaussian Splat model [using this link](https://media.reshot.ai/models/plush_sledge/output.zip)
-2. Run `pip install -r requirements.txt` (dockerized version in the works)
-3. Run the code in `scribbles.ipynb`
+1. Download the Gaussian Splat model [using this link](https://media.reshot.ai/models/plush_sledge/output.zip), and save it to `{Path of your Choice} / debug/point_cloud/iteration_30000/point_cloud.ply` 
+1. create the file `.env` in the root directory of the code, and add `MODEL_PATH="{Path of your Choice}"` (same path as above).
+1. Run `pip install -r requirements.txt` (dockerized version in the works)
+1. Run the code in `scribbles.ipynb`
 
 # About
 ## Learning 3D Vision Topics
