@@ -7,7 +7,7 @@ import glm
 import ctypes
 
 class Camera:
-    def __init__(self, h, w, position=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0), yaw=-np.pi/2, pitch=0):
+    def __init__(self, h, w, position=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0), up: np.array=np.array([0.0, -1.0, 0.0])):
         self.znear = 0.01
         self.zfar = 100
         # self.znear = .9 * max([w, h])
@@ -17,28 +17,11 @@ class Camera:
         self.fovy = np.pi / 2.0
         self.position = np.array(position)
         self.target = np.array(target)
-        self.up = np.array([0.0, -1.0, 0.0])
-        # self.yaw = yaw # TODO: never used. That's a bad sign...
-        # self.pitch = pitch
-
-        # self.is_pose_dirty = True
-        # self.is_intrin_dirty = True
-
-        # self.last_x = 640
-        # self.last_y = 360
-        # self.first_mouse = True
-
-        # self.is_leftmouse_pressed = False
-        # self.is_rightmouse_pressed = False
-
-        # self.rot_sensitivity = 0.02
-        # self.trans_sensitivity = 0.01
-        # self.zoom_sensitivity = 0.08
-        # self.roll_sensitivity = 0.03
+        self.up = up
 
     def _global_rot_mat(self):
         x = np.array([1, 0, 0])
-        z = np.cross(x, self.up)
+        z = np.cross(x, self.up) / np.linalg.norm(self.up)
         z = z / np.linalg.norm(z)
         x = np.cross(self.up, z)
         return np.stack([x, self.up, z], axis=-1)
