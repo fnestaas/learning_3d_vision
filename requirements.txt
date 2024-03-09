@@ -1,0 +1,7 @@
+numpy
+scipy 
+tqdm 
+PyOpenGL
+plyfile
+matplotlib
+python-decouple
