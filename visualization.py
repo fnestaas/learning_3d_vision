@@ -3,7 +3,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa
 import matplotlib.pyplot as plt
 import numpy as np
 from utils.Camera import Camera 
-from utils.Primitives import MultiGaussian, Gaussian
+from utils.Primitives import MultiGaussian, Gaussian, GaussianModel
 from utils.rendering import ParRenderer 
 from utils.util_gau import load_ply 
 from pathlib import Path 
@@ -17,19 +17,30 @@ def render(ax, ):
     print(azim_new, elev_new)
     azim = ax.azim 
     elev = ax.elev 
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    zlim = ax.get_zlim()
+
+    # Calculate the distance from the eye to the center of the scene
+    center_x = xlim[1]
+    center_y = ylim[1]
+    center_z = zlim[1]
+
+    dist = ((center_x - 0) ** 2 + (center_y - 0) ** 2 + (center_z - 0) ** 2) ** 0.5
+
     azim_ = np.deg2rad(azim)  # Convert to radians
 
     # Define elevation angle (in radians)
     elev_ = np.deg2rad(elev)  # Convert to radians
 
     # Convert spherical coordinates to Cartesian coordinates
-    x = 2.*np.cos(elev_) * np.cos(azim_)
-    y = 2.*np.cos(elev_) * np.sin(azim_)
-    z = 2.*np.sin(elev_)
+    x = dist*np.cos(elev_) * np.cos(azim_)
+    y = dist*np.cos(elev_) * np.sin(azim_)
+    z = dist*np.sin(elev_)
     position = (x+target[0], y+target[1], z+target[2])
     # up = np.array([up_x, up_y, up_z])
     up = np.array([0., 0., 1.])
-    print(f'{position=}')
+    print(f'{position=}, {dist=}')
     camera = Camera(w, h, position=position, target=target, up=up)
     bitmap_parts = renderer.plot_model_par_multiprimitives(camera, n_threads=n_threads, skip=7000, K=None)
     # do alpha blending post-hoc
@@ -71,15 +82,15 @@ shs = np.concatenate([
 ], axis=0)
 opacities = np.ones((N+3, ))
 
-gaussian_objects = load_ply(str(Path(config('MODEL_PATH'))/'debug/point_cloud/iteration_30000/point_cloud.ply'), dtype=np.float64)
-gaussian_objects_ax = MultiGaussian(
-    None,
-    poss=poss,
-    rots = rots,
-    opacities=opacities,
-    scales=scales,# np.random.random((N, 3))*.05,
-    shs=shs
-)
+gaussian_objects = load_ply(str(Path(config('MODEL_PATH'))/'debug/point_cloud/iteration_30000/point_cloud.ply'), dtype=np.float64, return_type='gm')
+# gaussian_objects_ax = MultiGaussian(
+#     None,
+#     poss=poss,
+#     rots = rots,
+#     opacities=opacities,
+#     scales=scales,# np.random.random((N, 3))*.05,
+#     shs=shs
+# )
 
 full_model = len(gaussian_objects) > 1000
 
@@ -105,8 +116,10 @@ ax = fig.add_subplot(1, 2, 1, projection='3d')
 ax2 = fig.add_subplot(1, 2, 2)
 target = (0., 0., 0.)
 # ax.scatter(poss[:, 0], poss[:, 1], poss[:, 2])
-poss = gaussian_objects.pos[np.random.choice(range(len(gaussian_objects),), 5000)]
-ax.scatter(poss[:, 0], poss[:, 1], poss[:, 2], alpha=.1)
+idx = np.random.choice(range(len(gaussian_objects),), 5000)
+poss = gaussian_objects.pos[idx]
+colors = [np.linalg.norm((1, 1, 1) - p) / (1-poss).max() for p in poss]
+ax.scatter(poss[:, 0], poss[:, 1], poss[:, 2], alpha=.1, c=colors)
 # ax.set_xlim([-1, 1])
 # ax.set_ylim([-1, 1])
 # ax.set_zlim([-1, 1])

@@ -1,5 +1,5 @@
 from typing import List, Dict 
-from utils.Primitives import MultiGaussian 
+from utils.Primitives import MultiGaussian, GaussianModel
 from utils.Camera import Camera 
 import time 
 import numpy as np 
@@ -25,10 +25,12 @@ class ParRenderer:
         ):
         # Clarification: Use class variable ParRenderer.gaussian_objects
         if K is None:
-            bitmap, alphas = MultiGaussian(parent=ParRenderer.gaussian_objects, ids=indices).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
+            # bitmap, alphas = MultiGaussian(parent=ParRenderer.gaussian_objects, ids=indices).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
+            bitmap, alphas = GaussianModel(ids=indices).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
         else:
             for ids in [indices[i*K:(i+1)*K] for i in range(len(indices) // K + int(len(indices) % K != 0))]:
-                bitmap, alphas = MultiGaussian(parent=ParRenderer.gaussian_objects, ids=ids).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
+                # bitmap, alphas = MultiGaussian(parent=ParRenderer.gaussian_objects, ids=ids).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
+                bitmap, alphas = GaussianModel(ids=ids).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
         return bitmap, alphas
 
 
