@@ -5,3 +5,5 @@ PyOpenGL
 plyfile
 matplotlib
 python-decouple
+PyGLM
+PyQt5

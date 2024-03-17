@@ -7,6 +7,12 @@ import random
 from typing import List, Optional
 from dataclasses import dataclass
 
+from typing import List, Dict 
+from utils.Camera import Camera 
+import time 
+import multiprocessing as mp 
+import functools
+
 ## the below implementation has/had some parts which I do not fully understand, and I suspect there may be optimizations to be made too.
 class Gaussian:
     def __init__(
@@ -157,7 +163,7 @@ class Gaussian:
         g_pos_ndc = self.get_pos_ndc(camera)
 
         bbox_ndc = np.multiply(vertices, bboxsize_ndc) + g_pos_ndc[:2]
-        bbox_ndc = np.hstack((bbox_ndc, np.zeros((vertices.shape[0],2)))) # concatenate bbox with "dummy" zeros
+        bbox_ndc = np.hstack((bbox_ndc, np.zeros((vertices.shape[0],2), dtype=self.dtype))) # concatenate bbox with "dummy" zeros
         bbox_ndc[:,2:4] = g_pos_ndc[2:4] # replace the dummy zeros above with z and w from clip position of gaussian. TODO: This is strange, in light of the way we define bboxsize_cam
 
         return conic, bboxsize_cam, bbox_ndc
@@ -246,10 +252,13 @@ class MultiGaussian:
             opacities: Optional[np.array]=None,
             shs: Optional[np.array]=None,
             ids=None, # which ids to take from parent
-            parent=None # MultiGaussian containing all of the Gaussians
+            parent=None, # MultiGaussian containing all of the Gaussians
+            dtype=np.float64
         ):
         self.parent = parent
         self.ids = ids
+        self.dtype = dtype 
+
         if parent is None:
             if gaussians is not None:
                 poss = np.stack([g.pos for g in gaussians], axis=0)
@@ -259,17 +268,19 @@ class MultiGaussian:
                 opacities = np.stack([g.opacity for g in gaussians], axis=0)
                 self.gaussians = gaussians # for debugging
             self.n_gaussians = len(poss)
-            self.pos = poss
-            self.scale = scales
+            self.pos = poss.astype(dtype)
+            self.scale = scales.astype(dtype)
             self.max_scale = scales.max(axis=-1)
+            self.min_scale = scales.min(axis=-1)
             # Initialize scipy Quaternion from rot (s, x, y, z)
-            if gaussians is None: self.rot = np.stack([spatial.transform.Rotation.from_quat(r).as_matrix() for r in rots], axis=0)
-            else: self.rot = rots
-            self.opacity = opacities
-            self.sh = shs
-            self.cov3D = self.compute_cov3d()
+            if gaussians is None: self.rot = np.stack([spatial.transform.Rotation.from_quat(r).as_matrix().astype(dtype) for r in rots], axis=0)
+            else: self.rot = rots.astype(dtype)
+            self.opacity = opacities.astype(dtype)
+            self.sh = shs.astype(dtype)
+            self.cov3D = self.compute_cov3d().astype(dtype)
             self.camera = camera
             self.vertices = np.array([[-1, 1], [1, 1], [1, -1], [-1, -1]])
+
         else:
             self.pos = parent.pos[ids]
             self.rot = parent.rot[ids]
@@ -281,6 +292,11 @@ class MultiGaussian:
             self.vertices = parent.vertices
             self.n_gaussians = len(self.pos)
             self.max_scale = parent.max_scale[ids]
+            self.min_scale = parent.min_scale[ids]
+            self.dtype = parent.dtype
+
+    def filter(self, criterion):
+        return MultiGaussian(parent=self, ids=criterion(self))
 
     def __len__(self):
         return self.n_gaussians
@@ -294,7 +310,7 @@ class MultiGaussian:
     def get_pos_cam(self, camera: Camera) -> np.array:
         """Get "5d vector" of 4d positions of the gaussian, as viewed by the camera"""
         view_mat = self.get_view_matrix(camera) # camera.get_view_matrix() # world space to view space # TODO: better to save this matrix and update it when necessary
-        g_pos_w = np.concatenate([self.pos, np.ones((len(self),1))], axis=-1)
+        g_pos_w = np.concatenate([self.pos, np.ones((len(self),1), dtype=self.dtype)], axis=-1)
         g_pos_cam = np.apply_along_axis(lambda v: view_mat @ v, axis=-1, arr=g_pos_w) # view_mat @ g_pos_w
         return g_pos_cam
 
@@ -304,22 +320,24 @@ class MultiGaussian:
                 self.camera = camera
 
     def get_view_matrix(self, camera: Camera=None):
-        self._update_camera(camera)
-        if not hasattr(self, 'view_matrix') or camera: self.view_matrix = self.camera.get_view_matrix()
-        return self.view_matrix
-        # return camera.get_view_matrix()
+        # self._update_camera(camera)
+        # if not hasattr(self, 'view_matrix') or camera: self.view_matrix = self.camera.get_view_matrix().astype(self.dtype)
+        # return self.view_matrix
+        if camera is None: camera = self.camera
+        return camera.get_view_matrix()
 
     def get_projection_matrix(self, camera: Camera=None):
-        self._update_camera(camera)
-        if not hasattr(self, 'projection_matrix') or camera: self.projection_matrix = self.camera.get_view_matrix()
-        return self.view_matrix
-        # return camera.get_projection_matrix()
+        # self._update_camera(camera)
+        # if not hasattr(self, 'projection_matrix') or camera: self.projection_matrix = self.camera.get_view_matrix().astype(self.dtype)
+        # return self.view_matrix
+        if camera is None: camera = self.camera
+        return camera.get_projection_matrix()
 
     def get_cov2d(self, camera: Camera=None, ) -> np.ndarray:
         """Get 2d covariance in ndc"""
         # g_pos_cam = self.get_pos_cam(camera)
-        view_matrix = self.get_view_matrix(camera)
         if camera is None: camera = self.camera
+        view_matrix = self.get_view_matrix(camera)
         [htan_fovx, htan_fovy, focal] = camera.get_htanfovxy_focal() # I guess this has to do with perspective rendering, but not sure
 
         # Implementation inspired by https://www.songho.ca/opengl/gl_projectionmatrix.html
@@ -334,7 +352,8 @@ class MultiGaussian:
                 [0., n/h * 2, 0., 0.],  # TODO: w or h?
                 [0., 0., -(n+f) / (f-n), 0.-2*n*f/(f - n)],
                 [0., 0., -1., 0.]
-            ]
+            ],
+            dtype=self.dtype
         )[:3, :3] # ignore w
         W = view_matrix[:3, :3].T
         T = W @ J
@@ -346,17 +365,17 @@ class MultiGaussian:
         """Get the perceived distance to the objects, as seen from the camera"""
         view_matrix = self.get_view_matrix(camera)
 
-        position4 = np.concatenate([self.pos, np.ones((len(self),1))], axis=-1) # last component is w factor, with which we divide to account for objects looking smaller in perspective projections
+        position4 = np.concatenate([self.pos, np.ones((len(self),1), dtype=self.dtype)], axis=-1) # last component is w factor, with which we divide to account for objects looking smaller in perspective projections
         g_pos_view = np.apply_along_axis(lambda v: view_matrix @ v, axis=-1, arr=position4) # view_mat @ g_pos_wview_matrix @ position4
         depth = g_pos_view[:, 2]
-        return depth
+        return -depth # WHY??? TODO
 
     def get_optimal_bb(self, camera: Camera, thresh: float=3., conic=None):
         # "inverse" of covariance - can be used to find active areas for each gaussian
         if conic is None:
             cov2d = self.get_cov2d(camera) # covariance
 
-            det = np.linalg.det(cov2d)
+            det = np.linalg.det(cov2d)# .astype(self.dtype)
 
             det_inv = 1.0 / np.maximum(1e-14, det) # instead of comparing det == 0. as was done earlier
             # cov = [cov2d[0,0], cov2d[0,1], cov2d[1,1]] # unique elements of covariance matrix
@@ -383,20 +402,7 @@ class MultiGaussian:
         bboxsize_cam = thresh*np.stack([self.max_scale] * 2, axis=-1)
         return bboxsize_cam
 
-    def get_conic_and_bb(self, camera: Camera, thresh:float=3., optimal:bool=False):
-        """Get conic and other bounding boxes. Is this implementation sound?"""
-        cov2d = self.get_cov2d(camera) # covariance
-
-        det = np.linalg.det(cov2d)
-
-        det_inv = 1.0 / np.maximum(1e-14, det) # instead of comparing det == 0. as was done earlier
-        cov = [cov2d[:, 0,0], cov2d[:, 0,1], cov2d[:, 1,1]] # unique elements of covariance matrix
-        conic = [cov[2]*det_inv, -cov[1]*det_inv , cov[0]*det_inv]
-
-        if not optimal:
-            bboxsize_cam = self.get_fast_bb(thresh)
-        else:
-            bboxsize_cam = self.get_optimal_bb(camera, thresh, conic)
+    def bb_cam2bb_ndc(self, bboxsize_cam, camera):
         bboxsize_ndc = bboxsize_cam
 
         vertices = np.tile(self.vertices, (len(self), 1, 1))
@@ -404,12 +410,26 @@ class MultiGaussian:
         g_pos_ndc = self.get_pos_ndc(camera)
 
         bbox_ndc = np.multiply(vertices, bboxsize_ndc.reshape(len(self), -1, 2)) + g_pos_ndc[:, :2].reshape(len(self), -1, 2)
-        # bbox_ndc = np.concatenate((bbox_ndc, np.zeros(vertices.shape)), axis=-1) # concatenate bbox with "dummy" zeros
-        # bbox_ndc[..., 2:4] = g_pos_ndc[:, 2:4].reshape((len(self), 1, 2)) # replace the dummy zeros above with z and w from clip position of gaussian. TODO: This is strange, in light of the way we define bboxsize_cam
-        # if self.parent is None:
-        #     self.conic = np.stack(conic, axis=-1)
-        #     self.bboxsize_cam = bboxsize_cam 
-        #     self.bbox_ndc = bbox_ndc
+        return bboxsize_cam, bbox_ndc
+
+    def get_conic(self, camera):
+        cov2d = self.get_cov2d(camera) 
+
+        det = np.linalg.det(cov2d).astype(self.dtype)
+
+        det_inv = 1.0 / np.maximum(1e-14, det) # instead of comparing det == 0. as was done earlier
+        cov = [cov2d[:, 0,0], cov2d[:, 0,1], cov2d[:, 1,1]] # unique elements of covariance matrix
+        conic = [cov[2]*det_inv, -cov[1]*det_inv , cov[0]*det_inv]
+        return conic 
+
+    def get_conic_and_bb(self, camera: Camera, thresh:float=3., optimal:bool=False, bboxsize_cam:np.ndarray=None):
+        """Get conic and other bounding boxes. Is this implementation sound?"""
+        conic = self.get_conic(camera)
+        if not optimal:
+            bboxsize_cam = self.get_fast_bb(thresh)
+        else:
+            bboxsize_cam = self.get_optimal_bb(camera, thresh, conic)
+        bboxsize_cam, bbox_ndc = self.bb_cam2bb_ndc(bboxsize_cam, camera)
         return np.stack(conic, axis=-1), bboxsize_cam, bbox_ndc
 
     def get_pos_ndc(self, camera: Camera):
@@ -418,10 +438,10 @@ class MultiGaussian:
         view_matrix = self.get_view_matrix(camera)# camera.get_view_matrix()
         projection_matrix = self.get_projection_matrix(camera) # camera.get_projection_matrix() # MAKE NDC
 
-        position4 = np.concatenate([self.pos, np.ones((len(self),1))], axis=-1)
-        g_pos_view = np.apply_along_axis(lambda v: view_matrix @ v, axis=-1, arr=position4)
+        position4 = np.concatenate([self.pos, np.ones((len(self),1), dtype=self.dtype)], axis=-1)
+        g_pos_view = np.apply_along_axis(lambda v: view_matrix @ v, axis=-1, arr=position4) 
         g_pos_screen = np.apply_along_axis(lambda v: projection_matrix @ v, axis=-1, arr=g_pos_view) # aka g_pos_clip
-        g_pos_screen = g_pos_screen / g_pos_screen[:, 3:4]
+        g_pos_screen = g_pos_screen[..., :3] / g_pos_screen[:, 3:4] # divide by w (3:4 so that shape of divisor is correct)
         return g_pos_screen
 
     def get_color(self, dir) -> np.ndarray:
@@ -480,36 +500,74 @@ class MultiGaussian:
         color += 0.5
         return np.clip(color, 0.0, 1.0)
 
-    def render(self, bitmap: np.ndarray, alphas: np.ndarray, ):
-        """Vectorized version of the plot_opacity function of the original repo - we want to loop as little as possible for speed"""
+    def get_depth_thresh(self, thresh: float, reach: float, alphas: np.ndarray, depths:np.array=None, camera:Camera=None):
+        # this method is mainly intended for the case where all gaussians have high opacity and large min_scale
+        # Render alpha fast (filling bounding box with a constant value rather than gaussian distr) and track
+        # depth where we reach alpha>=thresh. We can then use this information to avoid rendering gaussians
+        # that are too deep in the image to be visible
+        if camera is None: camera = self.camera
+        reached_depths = np.inf * np.ones(alphas.shape, dtype=self.dtype)
+        if depths is None: depths = self.get_depth(camera)
+        bboxsize_cam = np.stack([self.min_scale]*2, axis=-1)
+        bboxsize_cam, bbox_ndc =self.bb_cam2bb_ndc(bboxsize_cam, camera)
+        x_cam_1_, x_cam_2_, y_cam_1_, y_cam_2_, x1_, x2_, y1_, y2_, nx_, ny_, mask = self.get_plotting_coords(alphas, bbox_ndc=bbox_ndc, bboxsize_cam=bboxsize_cam)
+        opacity_ = self.opacity[mask]
+        scale_ = self.min_scale[mask]
+        for i, (x_cam_1, x_cam_2, y_cam_1, y_cam_2, x1, x2, y1, y2, nx, ny, opacity, scale) in enumerate(zip(
+            x_cam_1_,
+            x_cam_2_,
+            y_cam_1_,
+            y_cam_2_,
+            x1_,
+            x2_,
+            y1_,
+            y2_,
+            nx_,
+            ny_,
+            opacity_,
+            scale_
+        )):
+            # y_cam, x_cam = np.meshgrid(np.linspace(y_cam_1, y_cam_2, ny), np.linspace(x_cam_1, x_cam_2, nx), indexing='ij')
+            # x = np.sqrt(max([x_cam_1**2, x_cam_2**2]))
+            x = x_cam_1 
+            y = y_cam_1
+            # y = np.sqrt(max([y_cam_1**2, y_cam_2**2]))
+            power = (x + y)**2 / (2*(scale*reach) ** 2)
+            val = opacity * np.exp(-power*2) # multiply power by 2 since we are using a quadratic bb 
+            alphas[y1:y2, x1:x2] += (1-alphas[y1:y2, x1:x2]) * val 
+            reached_depths[y1:y2, x1:x2] = np.minimum(
+                reached_depths[y1:y2, x1:x2], 
+                np.where(alphas[y1:y2, x1:x2] < thresh, np.inf, depths[i])
+            )
+        return reached_depths
+         
+
+    def get_plotting_coords(self, alphas: np.ndarray, bboxsize_cam, bbox_ndc):
         def scale_wh(tnsr: np.ndarray, h: int, w: int):
             # scale values of tnsr's -1st axis, which has length 2, from -1, 1 to resp. 0, h and 0, w
             # replace this: np.array([(points_ndc[0] + 1) * width_half, (1.0 - points_ndc[1]) * height_half])
-            tnsr = np.stack([tnsr[:, :, 0]+1, 1-tnsr[:, :, 1]], axis=-1)
-            tnsr = tnsr * np.stack([np.ones(tnsr.shape[:-1])*h, np.ones(tnsr.shape[:-1])*w], axis=-1)
+            tnsr = np.stack([tnsr[:, :, 0]+1, 1-tnsr[:, :, 1]], axis=-1) # TODO: why doesn't 1+tnsr[:, :, 1] work?
+            tnsr = tnsr * np.stack([np.ones(tnsr.shape[:-1], dtype=self.dtype)*h, np.ones(tnsr.shape[:-1], dtype=self.dtype)*w], axis=-1)
             return tnsr / 2
         gaussians = self
-        camera = self.camera
-        conic_, bboxsize_cam, bbox_ndc = gaussians.get_conic_and_bb(camera, optimal=True) # different bounding boxes (active areas for gaussian)
-        h, w = bitmap.shape[:2]
+        h, w = alphas.shape[:2]
         bbox_screen = scale_wh(bbox_ndc, h, w)
 
         ul = bbox_screen[:, 0,:2] # Bounding box vertices
         ur = bbox_screen[:, 1,:2]
         ll = bbox_screen[:, 3,:2]
 
-        y1_ = np.maximum(np.floor(ul[:, 1]), np.zeros(len(gaussians))).astype(int)
-        x1_ = np.maximum(np.floor(ul[:, 0]), np.zeros(len(gaussians))).astype(int)
+        y1_ = np.maximum(np.floor(ul[:, 1]), np.zeros(len(gaussians), dtype=int)).astype(int)
+        x1_ = np.maximum(np.floor(ul[:, 0]), np.zeros(len(gaussians), dtype=int)).astype(int)
 
-        y2_ = np.minimum(np.ceil(ll[:, 1]), bitmap.shape[0]*np.ones(len(gaussians))).astype(int)
-        x2_ = np.minimum(np.ceil(ur[:, 0]), bitmap.shape[1]*np.ones(len(gaussians))).astype(int)
+        y2_ = np.minimum(np.ceil(ll[:, 1]), alphas.shape[0]*np.ones(len(gaussians), dtype=int)).astype(int)
+        x2_ = np.minimum(np.ceil(ur[:, 0]), alphas.shape[1]*np.ones(len(gaussians), dtype=int)).astype(int)
 
         mask = np.logical_and(x2_ > x1_, y2_ > y1_)
         x1_ = x1_[mask]
         x2_ = x2_[mask]
         y1_ = y1_[mask]
         y2_ = y2_[mask]
-        conic_ = conic_[mask]
 
         nx_ = x2_ - x1_
         ny_ = y2_ - y1_
@@ -520,16 +578,39 @@ class MultiGaussian:
         x_cam_2_ = coordxy[:, 1, 0]   # ur
         y_cam_1_ = coordxy[:, 1, 1]   # ur (y)
         y_cam_2_ = coordxy[:, 2, 1]   # lr
+        return (
+            x_cam_1_,
+            x_cam_2_,
+            y_cam_1_,
+            y_cam_2_,
+            x1_,
+            x2_,
+            y1_,
+            y2_,
+            nx_,
+            ny_,
+            mask
+        )
 
+
+    def render(self, bitmap: np.ndarray, alphas: np.ndarray, camera: Camera=None, depths=None, depth_map=None):
+        """Vectorized version of the plot_opacity function of the original repo - we want to loop as little as possible for speed"""
+        if camera is None: 
+            camera = self.camera
+        else: self._update_camera(camera)
+        gaussians = self
+        conic_, bboxsize_cam, bbox_ndc = gaussians.get_conic_and_bb(camera, optimal=False) # different bounding boxes (active areas for gaussian)
+        
+        x_cam_1_, x_cam_2_, y_cam_1_, y_cam_2_, x1_, x2_, y1_, y2_, nx_, ny_, mask = self.get_plotting_coords(alphas, bboxsize_cam, bbox_ndc)
+        gaussians = self  
         opacity_ = gaussians.opacity[mask]
 
         # camera_dir = gaussians.pos - camera.position.reshape((1, *camera.position.shape))
         # camera_dir = camera_dir / np.linalg.norm(camera_dir, axis=-1) # normalized camera viewing direction
         # color = gaussians.get_color(camera_dir)
         color_ = gaussians.get_color(None)[mask] 
-        # check_alpha = hasattr(self.parent, 'finished') # Too much overhead...
-
-        for x_cam_1, x_cam_2, y_cam_1, y_cam_2, x1, x2, y1, y2, nx, ny, opacity, color, conic in zip(
+        # check_alpha = hasattr(self.parent, 'finished') # Too much overhead... 
+        for i, (x_cam_1, x_cam_2, y_cam_1, y_cam_2, x1, x2, y1, y2, nx, ny, opacity, color, conic) in enumerate(zip(
             x_cam_1_,
             x_cam_2_,
             y_cam_1_,
@@ -543,15 +624,18 @@ class MultiGaussian:
             opacity_,
             color_,
             conic_
-        ):
+        )):
             # if not check_alpha or not np.all(self.parent.finished[y1:y2, x1:x2]): # slows the loop down too much
+            if depth_map is not None and depths[i] > depth_map[y1:y2,x1:x2].max(): 
+                # print('lol')
+                continue
             A, B, C = conic
             y_cam, x_cam = np.meshgrid(np.linspace(y_cam_1, y_cam_2, ny), np.linspace(x_cam_1, x_cam_2, nx), indexing='ij')
             power = -(A*x_cam**2 + C*y_cam**2)/2.0 - B * x_cam * y_cam
             alpha_ = opacity * np.exp(power)
-        
-            bitmap[y1:y2, x1:x2] = bitmap[y1:y2, x1:x2] + ((1-alphas[y1:y2, x1:x2])*alpha_)[..., np.newaxis] * color[0:3][np.newaxis, np.newaxis]
-            alphas[y1:y2, x1:x2] = alphas[y1:y2, x1:x2] + (1-alphas[y1:y2, x1:x2]) * alpha_
+            tmp = ((1-alphas[y1:y2, x1:x2]) * alpha_).astype(np.float32)
+            bitmap[y1:y2, x1:x2] = bitmap[y1:y2, x1:x2] + (tmp[..., np.newaxis] * color[0:3][np.newaxis, np.newaxis]).astype(np.float32)
+            alphas[y1:y2, x1:x2] = alphas[y1:y2, x1:x2] + tmp
         # finished = alphas > .5 # too slow to be useful
         # if hasattr(self.parent, 'finished'):
         #     self.parent.finished = np.logical_or(self.parent.finished, finished)

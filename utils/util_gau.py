@@ -61,7 +61,7 @@ def naive_gaussian():
     )
 
 
-def load_ply(path, return_mg=True):
+def load_ply(path, return_mg=True, **mg_kwargs):
     max_sh_degree = 3
     plydata = PlyData.read(path)
     xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
@@ -115,5 +115,6 @@ def load_ply(path, return_mg=True):
             scales=scales, 
             rots=rots, 
             opacities=opacities, 
-            shs=shs 
+            shs=shs,
+            **mg_kwargs
         )
