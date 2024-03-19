@@ -1,9 +1,13 @@
+"""
+Crude visualizer, which is to be improved
+"""
+
 import matplotlib as mpl  # noqa
 from mpl_toolkits.mplot3d import Axes3D  # noqa
 import matplotlib.pyplot as plt
 import numpy as np
 from utils.Camera import Camera 
-from utils.Primitives import MultiGaussian, Gaussian, GaussianModel
+from utils.Primitives import GaussianModel
 from utils.rendering import ParRenderer 
 from utils.util_gau import load_ply 
 from pathlib import Path 
@@ -42,7 +46,7 @@ def render(ax, ):
     up = np.array([0., 0., 1.])
     print(f'{position=}, {dist=}')
     camera = Camera(w, h, position=position, target=target, up=up)
-    bitmap_parts = renderer.plot_model_par_multiprimitives(camera, n_threads=n_threads, skip=18000, K=None)
+    bitmap_parts = renderer.plot_model_par_multiprimitives(camera, n_threads=n_threads, skip=5000, K=None)
     # do alpha blending post-hoc
     bitmap = np.zeros((w, h, 3))
     alpha = np.zeros((w, h))
@@ -83,33 +87,23 @@ shs = np.concatenate([
 opacities = np.ones((N+3, ))
 
 gaussian_objects = load_ply(str(Path(config('MODEL_PATH'))/'debug/point_cloud/iteration_30000/point_cloud.ply'), dtype=np.float64, return_type='gm')
-# gaussian_objects_ax = MultiGaussian(
-#     None,
-#     poss=poss,
-#     rots = rots,
-#     opacities=opacities,
-#     scales=scales,# np.random.random((N, 3))*.05,
-#     shs=shs
-# )
 
-full_model = len(gaussian_objects) > 1000
 
-n_threads = 1 if not full_model else 20
-delay = .1 if not full_model else .3
-resol = 100 if not full_model else 400
-if full_model: # change up direction to be z
-    gaussian_objects.pos -= gaussian_objects.pos.mean(axis=0)[np.newaxis, :]
-    mat = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]], np.float64)# np.transpose(np.eye(3), axes=(0, 2, 1))
-    gaussian_objects.pos = gaussian_objects.pos @ mat
-    gaussian_objects.scale = gaussian_objects.scale @ mat
-    gaussian_objects.rot = mat @ gaussian_objects.rot @ mat.T
-    gaussian_objects.cov3D =  mat @ gaussian_objects.cov3D @ mat.T
+n_threads = 20
+delay = .3
+resol = 400
+
+# change up direction to be z (as in matplotlib)
+gaussian_objects.pos -= gaussian_objects.pos.mean(axis=0)[np.newaxis, :]
+mat = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]], np.float64)# np.transpose(np.eye(3), axes=(0, 2, 1))
+gaussian_objects.pos = gaussian_objects.pos @ mat
+gaussian_objects.scale = gaussian_objects.scale @ mat
+gaussian_objects.rot = mat @ gaussian_objects.rot @ mat.T
+gaussian_objects.cov3D =  mat @ gaussian_objects.cov3D @ mat.T
     
 (w, h) = (resol, resol)
 renderer = ParRenderer(gaussian_objects)
-# ****************************************************************************
-# *                                 Plot data                                *
-# ****************************************************************************
+
 fig = plt.figure()
 ax = fig.add_subplot(1, 2, 1, projection='3d')
 # fig2, ax2 = plt.subplots(1, 1)
@@ -120,9 +114,7 @@ idx = np.random.choice(range(len(gaussian_objects),), 5000)
 poss = gaussian_objects.pos[idx]
 colors = [np.linalg.norm((1, 1, 1) - p) / (1-poss).max() for p in poss]
 ax.scatter(poss[:, 0], poss[:, 1], poss[:, 2], alpha=.1, c=colors)
-# ax.set_xlim([-1, 1])
-# ax.set_ylim([-1, 1])
-# ax.set_zlim([-1, 1])
+
 ax.set_xlabel('x')
 ax.set_ylabel('y')
 ax.set_zlabel('z')
@@ -144,9 +136,4 @@ while True:
         azim_new = ax.azim 
         elev_new = ax.elev 
         if almost_eq(azim, elev, azim_new, elev_new): render(ax)
-        # stop_event.set()
-        # stop_event = threading.Event()
-        # render_thread = threading.Thread(target=render, args=(ax, stop_event))
-        # render_thread.start()
-        # render_thread.join()
 

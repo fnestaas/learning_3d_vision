@@ -1,5 +1,5 @@
 from typing import List, Dict 
-from utils.Primitives import MultiGaussian, GaussianModel
+from utils.Primitives import GaussianModel
 from utils.Camera import Camera 
 import time 
 import numpy as np 
@@ -10,7 +10,7 @@ import functools
 
 
 class ParRenderer:
-    gaussian_objects: MultiGaussian
+    gaussian_objects: GaussianModel
 
     def __init__(self, gaussian_objects) -> None:
         ParRenderer.gaussian_objects = gaussian_objects
@@ -26,11 +26,11 @@ class ParRenderer:
         # Clarification: Use class variable ParRenderer.gaussian_objects
         if K is None:
             # bitmap, alphas = MultiGaussian(parent=ParRenderer.gaussian_objects, ids=indices).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
-            bitmap, alphas = GaussianModel(ids=indices).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
+            bitmap, alphas = GaussianModel(ids=indices).render(bitmap, alphas, depths=depths[indices], depth_map=depth_map, camera=ParRenderer.camera)
         else:
             for ids in [indices[i*K:(i+1)*K] for i in range(len(indices) // K + int(len(indices) % K != 0))]:
                 # bitmap, alphas = MultiGaussian(parent=ParRenderer.gaussian_objects, ids=ids).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
-                bitmap, alphas = GaussianModel(ids=ids).render(bitmap, alphas, depths=depths, depth_map=depth_map, camera=ParRenderer.camera)
+                bitmap, alphas = GaussianModel(ids=ids).render(bitmap, alphas, depths=depths[ids], depth_map=depth_map, camera=ParRenderer.camera)
         return bitmap, alphas
 
 
@@ -44,7 +44,8 @@ class ParRenderer:
         
         t0 = time.time()
         depths = gaussian_objects.get_depth(camera)
-        indices = np.argsort(depths)
+        indices = np.argpartition(depths, np.arange(len(gaussian_objects)//skip + 1)*skip) 
+        # indices = np.argsort(depths)
         t1 = time.time()
         print(f'sorted in time {t1-t0:.2f} s')
         w, h = camera.w, camera.h
@@ -87,5 +88,6 @@ class ParRenderer:
                     )
         t1 = time.time()
         print(f'rendered in time {t1-t0:.2f} s')
+        GaussianModel.max_depth = None
         
 

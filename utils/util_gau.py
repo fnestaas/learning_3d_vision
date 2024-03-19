@@ -2,7 +2,7 @@
 import numpy as np
 from plyfile import PlyData
 from dataclasses import dataclass
-from utils.Primitives import MultiGaussian, GaussianModel
+from utils.Primitives import GaussianModel
 
 @dataclass
 class GaussianData:
@@ -108,16 +108,6 @@ def load_ply(path, return_type=None, **mg_kwargs):
                         features_extra.reshape(len(features_dc), -1)], axis=-1).astype(np.float32)
     shs = shs.astype(np.float32)
     if return_type is None: return GaussianData(xyz, rots, scales, opacities, shs)
-    elif return_type == 'mg':
-        return MultiGaussian(
-            camera=None, 
-            poss=xyz, 
-            scales=scales, 
-            rots=rots, 
-            opacities=opacities, 
-            shs=shs,
-            **mg_kwargs
-        )
     else:
         return GaussianModel(
             camera=None, 
