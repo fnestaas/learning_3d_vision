@@ -9,7 +9,7 @@ import ctypes
 class Camera:
     def __init__(self, h, w, position=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0), up: np.array=np.array([0.0, -1.0, 0.0])):
         self.znear = 0.01
-        self.zfar = 100
+        self.zfar = 1000
         # self.znear = .9 * max([w, h])
         # self.zfar = 1.1 * max([w, h])
         self.h = h
@@ -102,12 +102,8 @@ class Camera:
 
         if len(points_ndc.shape) == 1:
             # It is a single point, so just return the pixel coordinates
-            return np.array([(points_ndc[0] + 1) * width_half, (1.0 - points_ndc[1]) * height_half])
+            return np.array([(points_ndc[0] + 1) * width_half, (1.0 + points_ndc[1]) * height_half])
         else:
-            return np.array([(point[0] * width_half + width_half, - point[1] * height_half + height_half)
+            return np.array([(point[0] * width_half + width_half, point[1] * height_half + height_half)
                 for point in points_ndc])
 
-    def update_resolution(self, height, width):
-        self.h = height
-        self.w = width
-        self.is_intrin_dirty = True
