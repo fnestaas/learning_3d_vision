@@ -939,25 +939,113 @@ class GaussianModel:
         )
 
 
-    def render(self, bitmap: np.ndarray, alphas: np.ndarray, camera: Camera=None, depths=None, depth_map=None):
+    def render(self, bitmap: np.ndarray, alphas: np.ndarray, camera: Camera=None, depths=None, depth_map=None, subimg_size=10):
+        # TODO: make this compute depths for each frame. That way we can use fewer gaussians per plot and stop computations fast
+        def compute_frame_powers(ids, xmin, xmax, ymin, ymax):
+            x_cam_1 = x_cam_1_[ids]
+            x_cam_2 = x_cam_2_[ids]
+            y_cam_1 = y_cam_1_[ids]
+            y_cam_2 = y_cam_2_[ids]
+            x1 = x1_[ids]
+            x2 = x2_[ids]
+            y1 = y1_[ids]
+            y2 = y2_[ids]
+            A = conic_[ids, 0].reshape((-1, 1, 1))
+            B = conic_[ids, 1].reshape((-1, 1, 1))
+            C = conic_[ids, 2].reshape((-1, 1, 1))
+            # interpolate to get bounds and make linspace
+            # TODO: define a different variable with slopes to make this faster
+            # TODO: find a better way than working with bbs directly...
+            xspace = np.linspace(x_cam_1 + (x_cam_2 - x_cam_1) * (xmin-x1) / (x2-x1), x_cam_2 + (x_cam_2 - x_cam_1) * (xmax-x2) / (x2-x1), xmax-xmin, endpoint=False).T
+            yspace = np.linspace(y_cam_1 + (y_cam_2 - y_cam_1) * (ymin-y1) / (y2-y1), y_cam_2 + (y_cam_2 - y_cam_1) * (ymax-y2) / (y2-y1), ymax-ymin, endpoint=False).T
+            x_cam = xspace.reshape(len(xspace), 1, -1)
+            y_cam = yspace.reshape(len(yspace), -1, 1) # TODO
+            power = -(A*x_cam**2 + C*y_cam**2)/2.0 - B * x_cam * y_cam
+            return opacity_[ids].reshape((-1, 1, 1)) * np.exp(power)
+
+        def compute_alphas(alphas_):
+            # TODO: sth like istar = np.max(np.argmax(a > .99, axis=0)) + 1 # or np.nonzero(a.min(axis=1).min(axis=1)>.99, axis=0).min()
+            # r = np.cumprod(1-a[:istar], axis=0)
+            # helper = a[:istar] / r 
+            # res = np.concatenate([np.cumsum(helper, axis=0) * r, np.ones(len(a) - istar)], axis=0)
+            # return np.minimum(res, 1.) # still needed since the required depth depends on the coordinates
+            a = np.concatenate([np.zeros((1, *alphas_.shape[1:])), alphas_], axis=0)
+            r = np.cumprod(1-a, axis=0) # alpha_i = l_i + r_i * alpha_0 # TODO: if a == 1, we are done, and we can just fill the result with 1's thereafter. Here, we can check if that happens
+            helper = (a / np.maximum(r, 0.)) 
+            res = np.cumsum(helper, axis=0) * r 
+            return np.minimum(res, 1.) # TODO: this is true, but can we avoid computation above using the fact that once alpha_ is 1, res is also 1?
+
+        if camera is None: 
+            camera = self.camera
+        else: GaussianModel._update_camera(camera)
+        s = subimg_size
+        # TODO: possible to speed up since we are working with frames and not bbs directly now?
+        # E.g. while sorting, compute bb's and use them to make an (nh, nw, len(self)) boolean array (depends on camera)
+        # keeping track of which gaussians are needed in which frame given a camera
+        # We can then set all entries to False when we have reached a certain depth too
+        conic_, bboxsize_cam, bbox_ndc = self.get_conic_and_bb(camera, optimal=True) # different bounding boxes (active areas for gaussian)
+        w, h = alphas.shape
+        # TODO: e.g. computing nx_ is no longer necessary. Think about optimizations here -- in principle, we only 
+        # need to know which gaussians are included, and can compute their required bounds based on the frame rather than
+        # the 3-sigma bounds
+        x_cam_1_, x_cam_2_, y_cam_1_, y_cam_2_, x1_, x2_, y1_, y2_, nx_, ny_, mask = self.get_plotting_coords(alphas, bboxsize_cam, bbox_ndc)
+        opacity_ = GaussianModel.opacity[self.ids][mask]
+        conic_ = conic_[mask]
+        # slopes_x = (x_cam_2_ - x_cam_1_) / (x2_ - x1_) # TODO: potentially do this and use in compute_frame_powers, but check first if we can rely less on bb's, as that might make this unneccesary
+        nh = h//subimg_size + int(h%subimg_size != 0)
+        nw = w//subimg_size + int(w%subimg_size != 0)
+        color_ = self.get_color(None)[mask] 
+        frame_x = np.arange(nh+1) * s # nh+1 due to stacking in next line
+        frame_x = np.stack([frame_x[:-1], np.minimum(frame_x[1:], h)], axis=-1)
+        frame_y = np.arange(nw+1) * s 
+        frame_y = np.stack([frame_y[:-1], np.minimum(frame_y[1:], w)], axis=-1)
+        frame_ids = np.logical_and(
+            # explanation for x1_: the newaxes for x1_ are because x1_ has the same value irrespective of which grid coordinates we are looking at. 
+            # However, that's not true for frame_x, which must be reshaped so that its values matches the frame coordinates.
+            np.logical_and(x1_[np.newaxis, np.newaxis, :] < frame_x[:, 1].reshape((-1, 1, 1)), x2_[np.newaxis, np.newaxis, :] >= frame_x[:, 0].reshape((-1, 1, 1)), ), # x is in range
+            np.logical_and(y1_[np.newaxis, np.newaxis, :] < frame_y[:, 1].reshape((1, -1, 1)), y2_[np.newaxis, np.newaxis, :] >= frame_y[:, 0].reshape((1, -1, 1)), ), # y is in range
+        ) # shape (s, s, len(self))
+        for i in range(nh): # TODO: maybe replace with np.ndenumerate
+            for j in range(nw):
+                curr_ids = frame_ids[i][j]
+                if not np.any(curr_ids): continue
+                frame_xmin = frame_x[i][0]
+                frame_ymin = frame_y[j][0]
+                frame_xmax = frame_x[i][1]
+                frame_ymax = frame_y[j][1]
+                
+                alphas_ = compute_frame_powers(curr_ids, frame_xmin, frame_xmax, frame_ymin, frame_ymax) # (n, s, s) sized array
+                # compute alphas in this sub image analytically from alphas_
+                alpha_stack = compute_alphas(alphas_) # (n+1, s, s) sized array -- 0th element is 0 (size (s, s))
+                
+                # compute bitmap using alpha_stack and colors
+                bitmap[frame_ymin:frame_ymax, frame_xmin:frame_xmax] = (
+                    color_[
+                        curr_ids
+                    ][:, np.newaxis, np.newaxis] * ((1-alpha_stack[:-1])*alphas_)[..., np.newaxis]
+                ).sum(axis=0)
+                alphas[frame_ymin:frame_ymax, frame_xmin:frame_xmax] = alpha_stack[-1]
+        # TODO: update self.frame_max_depths, and use this variable for skipping other computations too
+        return bitmap, alphas
+
+    def render_old(self, bitmap: np.ndarray, alphas: np.ndarray, camera: Camera=None, depths=None, depth_map=None):
         """Vectorized version of the plot_opacity function of the original repo - we want to loop as little as possible for speed"""
         if camera is None: 
             camera = self.camera
         else: GaussianModel._update_camera(camera)
-        conic_, bboxsize_cam, bbox_ndc = self.get_conic_and_bb(camera, optimal=False) # different bounding boxes (active areas for gaussian)
+        conic_, bboxsize_cam, bbox_ndc = self.get_conic_and_bb(camera, optimal=True) # different bounding boxes (active areas for gaussian)
         
         x_cam_1_, x_cam_2_, y_cam_1_, y_cam_2_, x1_, x2_, y1_, y2_, nx_, ny_, mask = self.get_plotting_coords(alphas, bboxsize_cam, bbox_ndc)
         opacity_ = GaussianModel.opacity[self.ids][mask]
-        n_bins = 20
+        n_bins = 40 # TODO: figure out how this scales with resolution
         bins = [[None for _ in range(n_bins)] for _ in range(n_bins)]
         bin_positions = np.zeros((len(x_cam_1_), 3), dtype=int)
-        # compute powers by binning on nx, ny
+        # compute alphas by binning on nx, ny
         xstep = (nx_.max()+1) / n_bins
         ystep = (ny_.max()+1) / n_bins
         for xbin in range(n_bins):
             xrange = (xbin*xstep, (xbin+1)*xstep)
             for ybin in range(n_bins):
-                # print(f'{xbin=}, {ybin=}')
                 yrange = (ybin*ystep, (ybin+1)*ystep)
                 # find ids with nx_, ny_ with the correct xrange and yrange
                 curr_ids = np.logical_and(
@@ -965,53 +1053,28 @@ class GaussianModel:
                     np.logical_and(yrange[0]<= ny_, ny_<yrange[1]),
                 )
                 if not curr_ids.sum(): continue
-                bin_positions[curr_ids] = np.concatenate([np.array([[xbin, ybin] for _ in range(curr_ids.sum())]), np.argsort(curr_ids.nonzero()).reshape((-1, 1))], axis=-1) # the bin ids and idx in that bin
+                bin_positions[curr_ids] = np.concatenate([np.array([[xbin, ybin] for _ in range(curr_ids.sum())]), np.arange(curr_ids.sum(), dtype=int).reshape((-1, 1))], axis=-1) # the bin ids and idx in that bin
                 # make linspace up to xrange.max, yrange.max, adjust according to x_cam, y_cam
                 xspace = np.linspace(x_cam_1_[curr_ids], x_cam_2_[curr_ids]*(int(xrange[1])+1)/nx_[curr_ids], int(xrange[1])+1).T
                 yspace = np.linspace(y_cam_1_[curr_ids], y_cam_2_[curr_ids]*(int(yrange[1])+1)/ny_[curr_ids], int(yrange[1])+1).T
-                conic = conic_[mask][curr_ids]
+                conic = conic_[mask][curr_ids].reshape((-1, 3, 1, 1))
                 x_cam = xspace.reshape((len(xspace), -1, 1))
                 y_cam = yspace.reshape((len(xspace), 1, -1)) # TODO: = y_cam[:, np.newaxis]
-                power = -(conic[:, 0].reshape((-1, 1, 1))*x_cam**2 + conic[:, 2].reshape((-1, 1, 1))*y_cam**2)/2.0 - conic[:, 1].reshape((-1, 1, 1)) * x_cam * y_cam
-                # meshgrid does not work as I thought
-                # x_cam, y_cam = np.meshgrid(xspace, yspace)
-                # power = -(conic[:, 0]*x_cam**2 + conic[:, 2]*y_cam**2)/2.0 - conic[:, 1] * x_cam * y_cam
+                power = -(conic[:, 0]*x_cam**2 + conic[:, 2]*y_cam**2)/2.0 - conic[:, 1] * x_cam * y_cam
                 # append to bins[xrange][yrange] 
-                # assert bins[xbin][ybin] is None, f'{xbin=}, {ybin=}'
                 bins[xbin][ybin] = np.transpose(opacity_[curr_ids].reshape((curr_ids.sum(), 1, 1))*np.exp(power), (0, 2, 1))
 
 
-        # camera_dir = gaussians.pos - camera.position.reshape((1, *camera.position.shape))
-        # camera_dir = camera_dir / np.linalg.norm(camera_dir, axis=-1) # normalized camera viewing direction
-        # color = gaussians.get_color(camera_dir)
         color_ = self.get_color(None)[mask] 
-        # check_alpha = hasattr(self.parent, 'finished') # Too much overhead... 
-        for i, (x_cam_1, x_cam_2, y_cam_1, y_cam_2, x1, x2, y1, y2, nx, ny, opacity, color, conic, bin_pos) in enumerate(zip(
-            x_cam_1_,
-            x_cam_2_,
-            y_cam_1_,
-            y_cam_2_,
+        for i, (x1, x2, y1, y2, color, bin_pos) in enumerate(zip(
             x1_,
             x2_,
             y1_,
             y2_,
-            nx_,
-            ny_,
-            opacity_,
             color_,
-            conic_, 
             bin_positions
         )):
-            # if not check_alpha or not np.all(self.parent.finished[y1:y2, x1:x2]): # slows the loop down too much
-            # if depth_map is not None and depths[i] > depth_map[y1:y2,x1:x2].max(): 
-            #     # print('lol')
-            #     continue
-            # A, B, C = conic
-            # y_cam, x_cam = np.meshgrid(np.linspace(y_cam_1, y_cam_2, ny), np.linspace(x_cam_1, x_cam_2, nx), indexing='ij')
-            # power = -(A*x_cam**2 + C*y_cam**2)/2.0 - B * x_cam * y_cam
-            # alpha_ = opacity * np.exp(power)
             xbin, ybin, j = bin_pos[0], bin_pos[1], bin_pos[2]
-            # if len(bins[xbin][ybin]) <= j: continue
             alpha_ = bins[xbin][ybin][j][:y2-y1, :x2-x1]
             tmp = ((1-alphas[y1:y2, x1:x2]) * alpha_).astype(np.float32)
             bitmap[y1:y2, x1:x2] = bitmap[y1:y2, x1:x2] + (tmp[..., np.newaxis] * color[0:3][np.newaxis, np.newaxis]).astype(np.float32)

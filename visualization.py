@@ -42,7 +42,7 @@ def render(ax, ):
     up = np.array([0., 0., 1.])
     print(f'{position=}, {dist=}')
     camera = Camera(w, h, position=position, target=target, up=up)
-    bitmap_parts = renderer.plot_model_par_multiprimitives(camera, n_threads=n_threads, skip=7000, K=None)
+    bitmap_parts = renderer.plot_model_par_multiprimitives(camera, n_threads=n_threads, skip=18000, K=None)
     # do alpha blending post-hoc
     bitmap = np.zeros((w, h, 3))
     alpha = np.zeros((w, h))
@@ -50,7 +50,7 @@ def render(ax, ):
     for bm, al in tqdm(bitmap_parts):
         # if stop_event.is_set(): return 
         tmp = (1-alpha)*al
-        bitmap = bitmap + tmp[..., np.newaxis]*bm
+        bitmap = bitmap + (1-alpha)[..., np.newaxis]*bm # tmp[..., np.newaxis]*bm
         alpha = alpha + tmp 
     assert isinstance(ax2, plt.Axes)
     ax2.cla()
